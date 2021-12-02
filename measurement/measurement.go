@@ -681,3 +681,109 @@ func calculateRhumbDestination(origin []float64, distance float64, bearing float
 	// normalise to -180...+180
 	return []float64{(math.Mod(((λ2*180.0)/math.Pi+540), 360) - 180.0), (φ2 * 180.0) / math.Pi}
 }
+
+// PointOnFeature takes a Feature and returns a point guaranteed to be on the surface of the feature.
+func PointOnFeature(f feature.Feature, properties map[string]interface{}, id string) (*geometry.Point, error) {
+	fs := []feature.Feature{}
+	fs = append(fs, f)
+	fc, err := feature.NewFeatureCollection(fs)
+	if err != nil {
+		return nil, err
+	}
+	return PointOnFeatureCollection(*fc, properties, id)
+}
+
+// PointOnFeatureCollection gets a feature collection and returns a point guaranteed to be on the surface of the feature.
+func PointOnFeatureCollection(fc feature.Collection, properties map[string]interface{}, id string) (*geometry.Point, error) {
+	centroid, err := CentroidFeatureCollection(fc, properties, id)
+	if err != nil {
+		return nil, err
+	}
+	cent, err := centroid.ToPoint()
+	var onSurface = false
+
+	for i := 0; !onSurface && i < len(fc.Features); i++ {
+		var geom = fc.Features[i].Geometry
+		onSurface = pointOnFeatureCollection(geom, *cent)
+	}
+
+	return cent, nil
+}
+
+func pointOnFeatureCollection(t interface{}, cent geometry.Point) bool {
+	var x, y, x1, y1, x2, y2 float64
+	var onBorderOrPoint = false
+	var onSurface = false
+
+	switch gtp := t.(type) {
+	case geometry.Point:
+		if cent.Lat == gtp.Lat && cent.Lng == gtp.Lng {
+			onSurface = true
+		}
+	case []geometry.Point:
+		var onMultiPoint = false
+
+		for k := 0; !onMultiPoint && k < len(gtp); k++ {
+			if cent.Lat == gtp[k].Lat && cent.Lng == gtp[k].Lng {
+				onSurface = true
+				onMultiPoint = true
+			}
+		}
+
+		onBorderOrPoint = onMultiPoint
+	case geometry.LineString:
+		for k := 0; !onBorderOrPoint && k < (len(gtp.Coordinates) - 1); k++ {
+			x = cent.Lat
+			y = cent.Lng
+			x1 = gtp.Coordinates[k].Lat
+			y1 = gtp.Coordinates[k].Lng
+			x2 = gtp.Coordinates[k + 1].Lat
+			y2 = gtp.Coordinates[k + 1].Lng
+			if pointOnSegment(x, y, x1, y1, x2, y2) {
+				onBorderOrPoint = true
+				onSurface = true
+			}
+		}
+	case geometry.MultiLineString:
+		for j:= 0; j < len(gtp.Coordinates); j++ {
+			onBorderOrPoint = false
+			var line = gtp.Coordinates[j];
+			for k := 0; !onBorderOrPoint && k < len(line.Coordinates) - 1; k++ {
+				x = cent.Lat
+				y = cent.Lng
+				x1 = line.Coordinates[k].Lat;
+				y1 = line.Coordinates[k].Lng;
+				x2 = line.Coordinates[k + 1].Lat;
+				y2 = line.Coordinates[k + 1].Lng;
+				if pointOnSegment(x, y, x1, y1, x2, y2) {
+					onBorderOrPoint = true
+					onSurface = true
+				}
+			}
+		}
+	case geometry.Polygon:
+		for _, c := range gtp.Coordinates {
+			//todo: decide if cent is on surface
+			print(len(c.Coordinates))
+		}
+		onSurface = true
+	case geometry.MultiPolygon:
+		coords := gtp.Coordinates
+		for _, coord := range coords {
+			for _, pl := range coord.Coordinates {
+				//todo: decide if cent is on surface
+				print(len(pl.Coordinates))
+			}
+		}
+		onSurface = true
+	}
+
+	return onSurface || onBorderOrPoint
+}
+
+func pointOnSegment(x float64, y float64, x1 float64, y1 float64, x2 float64, y2 float64) bool {
+	var ab = math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+	var ap = math.Sqrt((x - x1) * (x - x1) + (y - y1) * (y - y1))
+	var pb = math.Sqrt((x2 - x) * (x2 - x) + (y2 - y) * (y2 - y))
+	return ab == (ap + pb)
+}
